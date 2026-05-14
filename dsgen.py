@@ -1,16 +1,7 @@
-# !cp /content/drive/MyDrive/rot_api.py  /content/
-# !cp -r /content/drive/MyDrive/raw_data /content/raw_data
-
 import cv2, math
 import numpy as np
 from rot_api import crop_around_center, largest_rotated_rect, rotate_image
 import os
-
-
-import jupyter_beeper
-import time
-b = jupyter_beeper.Beeper()
-b.beep(frequency=530, secs=0.5, blocking=True)
 
 path_raw = r"raw_data"
 out_path = r"bw_dataset"
@@ -108,5 +99,3 @@ for num in ["1", "2", "3"]:
             max_iter_c += 1
             if max_iter_c > max_iter:
                 break
-
-# !zip -r /content/drive/MyDrive/bw_500_500_dataset.zip bw_dataset

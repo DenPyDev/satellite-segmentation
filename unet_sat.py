@@ -1,15 +1,18 @@
 import os
+from collections import defaultdict
 import skimage.io as io
-from skimage.transform import rescale, resize
+from skimage.transform import resize
 import numpy as np
 import matplotlib.pyplot as plt
+import cv2
+from shapely.geometry import MultiPolygon, Polygon
 
-from keras.models import *
-from keras.layers import *
-from keras.optimizers import *
-from keras.callbacks import ModelCheckpoint, LearningRateScheduler
-from keras.metrics import AUC
-from keras.preprocessing.image import ImageDataGenerator, load_img, img_to_array
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Input, Conv2D, MaxPooling2D, Dropout, UpSampling2D, concatenate
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import ModelCheckpoint, LearningRateScheduler
+from tensorflow.keras.metrics import AUC
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
 def unet(pretrained_weights=None, input_size=(256, 256, 3)):
     inputs = Input(input_size)
@@ -56,23 +59,23 @@ def unet(pretrained_weights=None, input_size=(256, 256, 3)):
     conv10 = Conv2D(1, 1, activation='sigmoid')(conv9)
 
     model = Model(inputs=inputs, outputs=conv10)
-    model.compile(optimizer=Adam(lr=1e-3), loss='binary_crossentropy', metrics=[AUC()])
+    model.compile(optimizer=Adam(learning_rate=1e-3), loss='binary_crossentropy', metrics=[AUC()])
 
     if pretrained_weights:
         model.load_weights(pretrained_weights)
     return model
 
 
-def adjustData(img,mask,flag_multi_class,num_class):
+def adjustData(img, mask):
   img = img / 255.0
   mask[mask>0] = 1
   mask[mask<1] = 0
-  return (img,mask)
+  return (img, mask)
 
 
 def trainGenerator(batch_size,train_path,image_folder,mask_folder,image_color_mode = "rgb",
                   mask_color_mode = "grayscale",image_save_prefix  = "image",mask_save_prefix  = "mask",
-                  flag_multi_class = False,num_class = 2,save_to_dir = None,target_size = (256,256),seed = 1):
+                  save_to_dir = None,target_size = (256,256),seed = 1):
   aug_dict = dict(rotation_range=0.2,
                   width_shift_range=0.05,
                   height_shift_range=0.05,
@@ -103,11 +106,11 @@ def trainGenerator(batch_size,train_path,image_folder,mask_folder,image_color_mo
       seed = seed)
   train_generator = zip(image_generator, mask_generator)
   for (img,mask) in train_generator:
-      img,mask = adjustData(img,mask,flag_multi_class,num_class)
+      img,mask = adjustData(img,mask)
       yield (img,mask)
 
 
-def testGenerator(test_path,num_image = 30, target_size = (256,256),flag_multi_class = False,as_gray = True):
+def testGenerator(test_path,num_image = 30, target_size = (256,256)):
     image_datagen = ImageDataGenerator()
     image_generator = image_datagen.flow_from_directory(
         test_path,
@@ -136,97 +139,35 @@ def GenTrainDataset(generator):
   
   return np.array(xTrain), np.array(yTrain)
 
-myGene = trainGenerator(32,'/content/dataset500/bw_dataset','img','mask',save_to_dir = None)
-model = unet()
-model_checkpoint = ModelCheckpoint('unet.hdf5', monitor='loss',verbose=1, save_best_only=True)
-history = model.fit(myGene,steps_per_epoch=100,epochs=15,callbacks=[model_checkpoint])# steps_per_epoch*trainGenerator(32 += len(pics)
-
-generator = trainGenerator(128,'/content/ds_val','img','mask',save_to_dir = None, seed=6)
-dataset = GenTrainDataset(generator)
-model.evaluate(dataset[0], dataset[1])
-
-keys = list(history.history.keys())
-print(keys)
-plt.figure(figsize=(10, 5))
-plt.plot(history.history[keys[0]], color='r')             
-plt.plot(history.history[keys[1]], color='b')
-plt.ylabel('Loss')
-plt.xlabel('Epoch')
-plt.show()
-
-bs = 100
-testGene = testGenerator("/content/ds_val", num_image = bs)
-list1 = []
-array = next(testGene).reshape((bs,256,256,3))
-
-results = model.predict(array)
-k=-1
-
-def ToMask(img1):
-  im = img1.reshape((256, 256))
-  treshold = 0.4
-  im[im>treshold] = 1
-  im[im<=treshold] = 0
-  return im
-
-k += 1
-plt.subplot(1,2,1).imshow(array[k].reshape((256, 256,3)))
-plt.subplot(1,2,2).imshow(ToMask(results[k]))
+def ToMask(img1, threshold=0.4):
+    im = img1.reshape((256, 256)).copy()
+    im[im > threshold] = 1
+    im[im <= threshold] = 0
+    return im
 
 
-def test_pair(ds_path, i = 0, target_size=(256, 256) ):
-  im_path = ds_path + "/img/"
-  mask_path = ds_path + "/mask/"
-  names_img = os.listdir(im_path)
-  p_img = resize(io.imread(im_path+ names_img[i], as_gray=False),target_size)#/ 255.0
-  p_mask = resize(io.imread(mask_path+ names_img[i], as_gray=True),target_size)#/ 255.0
-  return p_img, p_mask
+def test_pair(ds_path, i=0, target_size=(256, 256)):
+    im_path = ds_path + "/img/"
+    mask_path = ds_path + "/mask/"
+    names_img = os.listdir(im_path)
+    p_img = resize(io.imread(im_path + names_img[i], as_gray=False), target_size)
+    p_mask = resize(io.imread(mask_path + names_img[i], as_gray=True), target_size)
+    return p_img, p_mask
 
-
-for i in range(10,20):
-  p_img, p_mask = test_pair("/content/ds_val", i)
-
-  array = p_img.reshape((1, 256, 256, 3))
-  results = model.predict(array)
-
-  plt.subplots(3,1,figsize=(15,5))
-  plt.subplot(1, 4, 1).imshow(p_img.reshape((256, 256, 3)))
-  plt.subplot(1, 4, 2).imshow(p_mask.reshape((256, 256)), cmap='gray')
-  plt.subplot(1, 4, 3).imshow(results[0].reshape((256, 256)), cmap='gray')
-  plt.subplot(1, 4, 4).imshow(ToMask(results[0]), cmap='gray')
-
-
-from collections import defaultdict
-import csv
-import sys
-
-import cv2
-from shapely.geometry import MultiPolygon, Polygon
-import shapely.wkt
-import shapely.affinity
-import numpy as np
-import tifffile as tiff
 
 def mask_to_polygons(mask, epsilon=10., min_area=10.):
-    # first, find contours with cv2: it's much faster than shapely
-
     temp = ((mask == 1) * 255).astype(np.uint8)
-    contours, hierarchy = cv2.findContours( temp , cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_KCOS)
-    # create approximate contours to have reasonable submission size
-    approx_contours = [cv2.approxPolyDP(cnt, epsilon, True)
-                       for cnt in contours]
+    contours, hierarchy = cv2.findContours(temp, cv2.RETR_CCOMP, cv2.CHAIN_APPROX_TC89_KCOS)
     if not contours:
         return MultiPolygon()
-    # now messy stuff to associate parent and child contours
+    approx_contours = [cv2.approxPolyDP(cnt, epsilon, True) for cnt in contours]
     cnt_children = defaultdict(list)
     child_contours = set()
     assert hierarchy.shape[0] == 1
-    # http://docs.opencv.org/3.1.0/d9/d8b/tutorial_py_contours_hierarchy.html
     for idx, (_, _, _, parent_idx) in enumerate(hierarchy[0]):
         if parent_idx != -1:
             child_contours.add(idx)
             cnt_children[parent_idx].append(approx_contours[idx])
-    # create actual polygons filtering by area (removes artifacts)
     all_polygons = []
     for idx, cnt in enumerate(approx_contours):
         if idx not in child_contours and cv2.contourArea(cnt) >= min_area:
@@ -236,15 +177,13 @@ def mask_to_polygons(mask, epsilon=10., min_area=10.):
                 holes=[c[:, 0, :] for c in cnt_children.get(idx, [])
                        if cv2.contourArea(c) >= min_area])
             all_polygons.append(poly)
-    # approximating polygons might have created invalid ones, fix them
     all_polygons = MultiPolygon(all_polygons)
     if not all_polygons.is_valid:
         all_polygons = all_polygons.buffer(0)
-        # Sometimes buffer() converts a simple Multipolygon to just a Polygon,
-        # need to keep it a Multi throughout
         if all_polygons.type == 'Polygon':
             all_polygons = MultiPolygon([all_polygons])
     return all_polygons
+
 
 def mask_for_polygons(polygons, im_size):
     img_mask = np.zeros(im_size, np.uint8)
@@ -252,58 +191,30 @@ def mask_for_polygons(polygons, im_size):
         return img_mask
     int_coords = lambda x: np.array(x).round().astype(np.int32)
     exteriors = [int_coords(poly.exterior.coords) for poly in polygons]
-    interiors = [int_coords(pi.coords) for poly in polygons
-                 for pi in poly.interiors]
+    interiors = [int_coords(pi.coords) for poly in polygons for pi in poly.interiors]
     cv2.fillPoly(img_mask, exteriors, 1)
     cv2.fillPoly(img_mask, interiors, 0)
     return img_mask
 
 
+if __name__ == '__main__':
+  myGene = trainGenerator(32,'bw_dataset','img','mask',save_to_dir = None)
+  model = unet()
+  model_checkpoint = ModelCheckpoint('unet.hdf5', monitor='loss',verbose=1, save_best_only=True)
+  history = model.fit(myGene,steps_per_epoch=100,epochs=15,callbacks=[model_checkpoint])
 
-mask = ToMask(results[0])
-pred_polygons = mask_to_polygons(mask)
-pred_poly_mask = mask_for_polygons(pred_polygons, mask.shape[:2])
+  generator = trainGenerator(128,'ds_val','img','mask',save_to_dir=None, seed=6)
+  dataset = GenTrainDataset(generator)
+  model.evaluate(dataset[0], dataset[1])
 
-plt.subplots(3,1,figsize=(15,5))
-plt.subplot(1, 2, 1).imshow(mask.reshape((256, 256)))
-plt.subplot(1, 2, 2).imshow(pred_poly_mask.reshape((256, 256)))
+  keys = list(history.history.keys())
+  print(keys)
+  plt.figure(figsize=(10, 5))
+  plt.plot(history.history[keys[0]], color='r')
+  plt.plot(history.history[keys[1]], color='b')
+  plt.ylabel('Loss')
+  plt.xlabel('Epoch')
+  plt.show()
 
-
-
-for i in range(10):
-
-  p_img, p_mask = test_pair("/content/ds_val", i)
-
-  array = p_img.reshape((1, 256, 256, 3))
-  results = model.predict(array)
-
-  plt.subplots(3,1,figsize=(15,5))
-
-  plt.subplot(1, 5, 1)
-  plt.title("img")
-  plt.imshow(p_img.reshape((256, 256, 3)))
-
-  plt.subplot(1, 5, 2)
-  plt.title("mask")
-  plt.imshow(p_mask.reshape((256, 256)), cmap='gray')
-
-  plt.subplot(1, 5, 3)
-  plt.title("predict")
-  plt.imshow(results[0].reshape((256, 256)), cmap='gray')
-
-
-  mask = ToMask(results[0])
-
-  plt.subplot(1, 5, 4)
-  plt.title("predict bin")
-  plt.imshow(mask, cmap='gray')
-
-  pred_polygons = mask_to_polygons(mask)
-  pred_poly_mask = mask_for_polygons(pred_polygons, mask.shape[:2])
-
-  plt.subplot(1, 5, 5)
-  plt.title("predict vect")
-  plt.imshow(pred_poly_mask.reshape((256, 256)), cmap='gray')
-
-model.save_weights('/content/drive/MyDrive/weights.h5')
+  model.save_weights('weights.h5')
 

@@ -14,16 +14,14 @@ def dataset_rearranger(dataset_path, image_folder="img", mask_folder="mask", f_e
         if f.endswith(f_ext):
             masks_raw.append(f)
 
-    # названия файлов которые есть в обоих директориях
+    # files present in both directories
     files = list(set(images_raw).intersection(masks_raw))
 
-    # подсчет сколько файлов в какой части датасета будет
     all_amount = len(files)
     train_amount = int(all_amount * 0.7)
     val_amount = int(all_amount * 0.2)
     test_amount = int(all_amount - train_amount - val_amount)
 
-    # составление списков файлов
     train_files = files[:train_amount]
     val_files = files[train_amount:train_amount + val_amount]
     test_files = files[train_amount + val_amount:]
@@ -72,5 +70,6 @@ def dataset_rearranger(dataset_path, image_folder="img", mask_folder="mask", f_e
 
         shutil.move(src, dst)
 
-dataset_path = "/content/dataset500/bw_dataset"
-dataset_rearranger(dataset_path)
+if __name__ == '__main__':
+    dataset_path = "bw_dataset"
+    dataset_rearranger(dataset_path)
